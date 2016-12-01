@@ -6,10 +6,50 @@
 #include <memory>
 #include <numeric>
 #include <array>
+#include <thread>
+#include <type_traits>
 
 #include "short_alloc.h"
 
 using namespace std;
+
+template <class T>
+using DistSelector_t = conditional_t<is_integral<T>::value, uniform_int_distribution<>, uniform_real_distribution<>>;
+
+template <class T, size_t N = 100, class Distribution = DistSelector_t<T>>
+class FuckingRanomizer
+{
+    FuckingRanomizer(T _min, T _max) 
+        : min(_min),
+        max(_max),
+        gen(random_device()()),
+        dis(min, max),
+        currProdPos(0),
+        currConsPos(0)
+    {
+        prod = make_unique<thread>([&this] {
+            while (this->currProdPos % N != this->currConsPos % N)
+            {
+                this->currProdPos %= N;
+                this->currConsPos %= N;
+                vals[this->currProdPos++] = dis(gen);
+            }
+        });
+    }
+    T getNext()
+    {
+        return T();
+    }
+private:
+    T min;
+    T max;
+    T vals[N];
+    size_t currProdPos;
+    size_t currConsPos;
+    mt19937 gen;
+    Distribution dis;
+    unique_ptr<thread> prod;
+};
 
 template <int MIN, int MAX>
 int getRand()
@@ -25,7 +65,7 @@ bool flip(double p = 0.5)
     static std::random_device rd;
     static std::mt19937 gen(rd());
     static std::uniform_real_distribution<> dis;
-    return dis(gen) < p ? true : false;
+    return dis(gen) < p;
 }
 
 template <size_t N>
@@ -51,7 +91,7 @@ int randFrom( const array<int, N> &values, array<double, N> probs)
     return values[targetPos];
 }
 
-template <class T, size_t N = 40>
+template <class T, size_t N = 200>
 auto& arenaFor()
 {
     static arena<sizeof(T) * N, alignof(T)> a{};
@@ -86,6 +126,10 @@ public:
     void Value::operator delete(void *ptr)
     {
         arenaFor<Value>().deallocate((char*)ptr, sizeof(Value));
+    }
+    static void resetArena()
+    {
+        arenaFor<Value>().reset();
     }
 private:
     int data;
@@ -135,6 +179,10 @@ public:
     void Variable::operator delete(void *ptr)
     {
         arenaFor<Variable>().deallocate((char*)ptr, sizeof(Variable));
+    }
+    static void resetArena()
+    {
+        arenaFor<Variable>().reset();
     }
 
 private:
@@ -193,6 +241,10 @@ public:
     {
         arenaFor<Operation>().deallocate((char*)ptr, sizeof(Operation));
     }
+    static void resetArena()
+    {
+        arenaFor<Operation>().reset();
+    }
 private:
     OperationType operation;
     std::pair<NodePtr, NodePtr> nodeStg;
@@ -210,7 +262,7 @@ NodePtr generate_operations()
             root = new Value(getRand< 0, 9>());
             break;
         case 1:
-            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 25, 25})));
+            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 0, 0})));
             break;
         }
     }
@@ -229,9 +281,9 @@ array<int, N> calculate(NodePtr operation_tree, int xpp, int xp)
     array<int, N> res_seq;
     res_seq[0] = xpp;
     res_seq[1] = xp;
-    for (int i = 2; i < count; i++)
+    for (int i = 0; i < count; i++)
     {
-        res_seq[i] = operation_tree->eval(i+1, res_seq[i-1], res_seq[i-2]);
+        res_seq[i] = operation_tree->eval(i+1, 0, 0);
     }
     return res_seq;
 }
@@ -239,20 +291,25 @@ array<int, N> calculate(NodePtr operation_tree, int xpp, int xp)
 
 int main()
 {
+    using T = conditional<is_integral<float>::value, uniform_int_distribution<>, uniform_real_distribution<>>::type;
+    T v;
     //map<int, int> fre;
     //for (int i = 0; i < 1000000; i++)
     //{
     //    int rn = randFrom({ 1,2,3 }, { 25,50,25 });
     //    fre[rn]++;
     //}
-
-    constexpr array<int, 5> target{ 1, 4, 8, 16, 20};
-    array<int, target.size()> result;
+    constexpr int sz = 3;
+    constexpr array<int, sz> target{ -9,-2,-3 };
+    array<int, sz> result;
     unique_ptr<Node> root;
     while (true)
     {
+        Value::resetArena();
+        Variable::resetArena();
+        Operation::resetArena();
         root.reset(generate_operations());
-        result = calculate<target.size()>(root.get(), target[0], target[1]);
+        result = calculate<sz>(root.get(), target[0], target[1]);
         if (target == result)
         {
             break;
