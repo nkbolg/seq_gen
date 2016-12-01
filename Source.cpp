@@ -5,6 +5,9 @@
 #include <string>
 #include <memory>
 #include <numeric>
+#include <array>
+
+#include "short_alloc.h"
 
 using namespace std;
 
@@ -25,7 +28,8 @@ bool flip(double p = 0.5)
     return dis(gen) < p ? true : false;
 }
 
-int randFrom( const vector<int> &values, vector<double> probs)
+template <size_t N>
+int randFrom( const array<int, N> &values, array<double, N> probs)
 {
     double sum = accumulate(probs.begin(), probs.end(), 0.);
     for (size_t i = 1; i < probs.size(); i++)
@@ -47,6 +51,13 @@ int randFrom( const vector<int> &values, vector<double> probs)
     return values[targetPos];
 }
 
+template <class T, size_t N = 40>
+auto& arenaFor()
+{
+    static arena<sizeof(T) * N, alignof(T)> a{};
+    return a;
+}
+
 class Node
 {
 public:
@@ -57,7 +68,6 @@ public:
 };
 
 using NodePtr = Node*;
-using NodeStorage = std::pair<NodePtr,NodePtr>;
 
 // 0-9
 class Value : public Node
@@ -68,9 +78,19 @@ public:
     virtual int eval(int n, int xp, int xpp) override { return data; }
     virtual int size() override { return 1; }
     virtual void print() override { cout << data << " "; }
+
+    void* Value::operator new (size_t count)
+    {
+        return arenaFor<Value>().allocate<alignof(Value)>(count);
+    }
+    void Value::operator delete(void *ptr)
+    {
+        arenaFor<Value>().deallocate((char*)ptr, sizeof(Value));
+    }
 private:
     int data;
 };
+
 
 enum class VariableType
 {
@@ -107,6 +127,16 @@ public:
     }
     virtual int size() override { return 1; }
     virtual void print() override { cout << VarTypeToStr[type] << " "; }
+
+    void* Variable::operator new (size_t count)
+    {
+        return arenaFor<Variable>().allocate<alignof(Variable)>(count);
+    }
+    void Variable::operator delete(void *ptr)
+    {
+        arenaFor<Variable>().deallocate((char*)ptr, sizeof(Variable));
+    }
+
 private:
     VariableType type;
 };
@@ -123,7 +153,7 @@ map<OperationType, string> OpTypeToStr = { {OperationType::plus, "+"}, {Operatio
 class Operation : public Node
 {
 public:
-    Operation(OperationType _operation, const NodeStorage &_nodeStg) : operation(_operation), nodeStg(_nodeStg) {}
+    Operation(OperationType _operation, const std::pair<NodePtr, NodePtr> &_nodeStg) : operation(_operation), nodeStg(_nodeStg) {}
     ~Operation() 
     { 
         delete nodeStg.first;
@@ -154,9 +184,18 @@ public:
         nodeStg.second->print();
         cout << ") ";
     }
+
+    void* Operation::operator new (size_t count)
+    {
+        return arenaFor<Operation>().allocate<alignof(Operation)>(count);
+    }
+    void Operation::operator delete(void *ptr)
+    {
+        arenaFor<Operation>().deallocate((char*)ptr, sizeof(Operation));
+    }
 private:
     OperationType operation;
-    NodeStorage nodeStg;
+    std::pair<NodePtr, NodePtr> nodeStg;
 };
 
 
@@ -171,7 +210,7 @@ NodePtr generate_operations()
             root = new Value(getRand< 0, 9>());
             break;
         case 1:
-            root = new Variable((VariableType)(randFrom({ 0,1,2 }, {50, 25, 25})));
+            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 25, 25})));
             break;
         }
     }
@@ -183,9 +222,11 @@ NodePtr generate_operations()
     return root;
 }
 
-vector<int> calculate(NodePtr operation_tree, int count, int xpp, int xp)
+template <size_t N>
+array<int, N> calculate(NodePtr operation_tree, int xpp, int xp)
 {
-    vector<int> res_seq(count);
+    int count = N;
+    array<int, N> res_seq;
     res_seq[0] = xpp;
     res_seq[1] = xp;
     for (int i = 2; i < count; i++)
@@ -205,13 +246,13 @@ int main()
     //    fre[rn]++;
     //}
 
-    vector<int> target{ 1, 4, 8, 16, 20};
-    vector<int> result;
+    constexpr array<int, 5> target{ 1, 4, 8, 16, 20};
+    array<int, target.size()> result;
     unique_ptr<Node> root;
     while (true)
     {
         root.reset(generate_operations());
-        result = calculate(root.get(), target.size(), target[0], target[1]);
+        result = calculate<target.size()>(root.get(), target[0], target[1]);
         if (target == result)
         {
             break;
