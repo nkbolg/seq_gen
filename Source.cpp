@@ -212,7 +212,7 @@ NodePtr generate_operations()
             root = new Value(getRand< 0, 9>());
             break;
         case 1:
-            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 1, 1})));
+            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 25, 25})));
             break;
         }
     }
@@ -250,7 +250,74 @@ double distance(const array<T, N> &lhs, const array<T, N> &rhs)
     return dist;
 }
 
+template <size_t N>
+unique_ptr<Node> dumb_random_search(const array <int, N> &target)
+{
+    array<int, N> result{};
+    unique_ptr<Node> root;
+    while (true)
+    {
+        root.reset(generate_operations());
+        result = calculate<N>(root.get(), target[0], target[1]);
+        if (target == result)
+        {
+            break;
+        }
+    }
+    return root;
+}
 
+NodePtr mutate(NodePtr p0, NodePtr p1)
+{
+    int sz0 = p0->size();
+    int sz1 = p1->size();
+    //TODO: do something
+    return{};
+}
+
+template <size_t N>
+unique_ptr<Node> mutating_search(const array <int, N> &target)
+{
+    unique_ptr<Node> winner = nullptr;
+    array<int, N> result {};
+    array<unique_ptr<Node>, 4> gens;
+    array<pair<double,size_t>, gens.size()> distances;
+    size_t mutants = 2;
+
+    for_each(begin(gens), end(gens), [](auto &genPtr) { genPtr.reset(generate_operations()); });
+
+    while (true)
+    {
+        for (size_t i = 0; i < gens.size(); ++i)
+        {
+            auto &gen = gens[i];
+            result = calculate<N>(gen.get(), target[0], target[1]);
+            double m_distance = distance(result, target);
+            distances[i] = make_pair(m_distance, i);
+            if (m_distance <= 1.)
+            {
+                winner = move(gen);
+                return winner;
+            }
+        }
+
+        std::sort(begin(distances), end(distances), [](const auto &l, const auto &r) {
+            return l.first < r.first;
+        });
+
+        /*unique_ptr<Node> parent0 = move(gens[distances[0].second]);
+        unique_ptr<Node> parent1 = move(gens[distances[1].second]);
+
+        for_each(begin(gens), begin(gens) + mutants, [&parent0, &parent1](auto &gen) {
+            gen.reset(mutate(parent0.get(), parent1.get()));
+        });*/
+        for_each(begin(gens) + mutants, end(gens), [](auto &gen) {
+            gen.reset(generate_operations());
+        });
+
+
+    }
+}
 
 int main()
 {
@@ -261,19 +328,13 @@ int main()
     //    fre[rn]++;
     //}
     
-    constexpr array<int, 6> target{ 1, 4, 12, 16, 20, 24};
-    array<int, target.size()> result {};
-    unique_ptr<Node> root;
-    while (true)
-    {
-        root.reset(generate_operations());
-        result = calculate<target.size()>(root.get(), target[0], target[1]);
-        //if (target == result)
-        if (distance(target, result) < 2.)
-        {
-            break;
-        }
-    }
+    constexpr array<int, 5> target{ 1, 1, 2, 3, 5};
+
+    /*auto root = dumb_random_search(target);*/
+    auto root = mutating_search(target);
+
+    array<int, target.size()> result{};
+    result = calculate<target.size()>(root.get(), target[0], target[1]);
 
     root->print();
     cout << endl;
