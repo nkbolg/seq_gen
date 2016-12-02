@@ -1,3 +1,6 @@
+// This is a personal academic project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
+
 #include <vector>
 #include <random>
 #include <iostream>
@@ -27,29 +30,24 @@ bool flip(double p = 0.5)
     static std::random_device rd;
     static std::mt19937 gen(rd());
     static std::uniform_real_distribution<> dis;
-    return dis(gen) < p ? true : false;
+    return dis(gen) < p;
 }
 
 template <size_t N>
 int randFrom( const array<int, N> &values, array<double, N> probs)
 {
-    const double sum = accumulate(probs.begin(), probs.end(), 0.);
-    for (size_t i = 1; i < probs.size(); i++)
-    {
-        probs[i] += probs[i - 1];
-    }
+    double sum = 0.;
+    for_each(probs.begin(), probs.end(), [&sum](double &val) {
+        val += sum;
+        sum = val;
+    });
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<> dis(0, sum);
     const double rand = dis(gen);
-    size_t targetPos = 0;
-    for (; targetPos < probs.size(); targetPos++)
-    {
-        if (probs[targetPos] > rand)
-        {
-            break;
-        }
-    }
+    size_t targetPos = distance(probs.begin(), 
+        find_if(probs.begin(), probs.end(), 
+            [rand](double element) { return element > rand; }));
     return values[targetPos];
 }
 
@@ -64,7 +62,7 @@ class Node
 {
 public:
     virtual ~Node() = default;
-    virtual int eval(int n, int xp, int xpp) const = 0;
+    virtual int eval(size_t n, int xp, int xpp) const = 0;
     virtual int size() const = 0;
     virtual void print() const = 0;
 };
@@ -77,7 +75,7 @@ class Value : public Node
 public:
     Value(int _data) : data(_data) {}
     ~Value() = default;
-    virtual int eval(int n, int xp, int xpp) const override { return data; }
+    virtual int eval(size_t n, int xp, int xpp) const override { return data; }
     virtual int size() const override { return 1; }
     virtual void print() const override { cout << data << " "; }
 
@@ -109,11 +107,11 @@ class Variable : public Node
 public:
     Variable(VariableType _type) : type(_type) {}
     ~Variable() = default;
-    virtual int eval(int n, int xp, int xpp) const override {
+    virtual int eval(size_t n, int xp, int xpp) const override {
         switch (type)
         {
         case VariableType::N:
-            return n;
+            return (int)n;
             break;
         case VariableType::XP:
             return xp;
@@ -161,7 +159,7 @@ public:
         delete nodeStg.first;
         delete nodeStg.second;
     }
-    virtual int eval(int n, int xp, int xpp) const override {
+    virtual int eval(size_t n, int xp, int xpp) const override {
         switch (operation)
         {
         case OperationType::plus:
@@ -227,11 +225,11 @@ NodePtr generate_operations()
 template <size_t N>
 array<int, N> calculate(const NodePtr operation_tree, int xpp, int xp)
 {
-    constexpr int count = N;
+    constexpr size_t count = N;
     array<int, N> res_seq;
     res_seq[0] = xpp;
     res_seq[1] = xp;
-    for (int i = 2; i < count; i++)
+    for (size_t i = 2; i < count; i++)
     {
         res_seq[i] = operation_tree->eval(i+1, res_seq[i-1], res_seq[i-2]);
     }
@@ -280,7 +278,8 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
 {
     unique_ptr<Node> winner = nullptr;
     array<int, N> result {};
-    array<unique_ptr<Node>, 4> gens;
+    constexpr size_t gens_number = 4;
+    array<unique_ptr<Node>, gens_number> gens;
     array<pair<double,size_t>, gens.size()> distances;
     size_t mutants = 2;
 
@@ -324,14 +323,14 @@ int main()
     //map<int, int> fre;
     //for (int i = 0; i < 1000000; i++)
     //{
-    //    int rn = randFrom({ 1,2,3 }, { 25,50,25 });
+    //    int rn = randFrom<3>({ 1,2,3 }, { 25,1,1 });
     //    fre[rn]++;
     //}
     
     constexpr array<int, 5> target{ 1, 1, 2, 3, 5};
 
-    /*auto root = dumb_random_search(target);*/
-    auto root = mutating_search(target);
+    auto root = dumb_random_search(target);
+    //auto root = mutating_search(target);
 
     array<int, target.size()> result{};
     result = calculate<target.size()>(root.get(), target[0], target[1]);
