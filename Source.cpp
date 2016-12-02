@@ -6,8 +6,10 @@
 #include <memory>
 #include <numeric>
 #include <array>
+#include <cmath>
 
 #include "short_alloc.h"
+
 
 using namespace std;
 
@@ -31,7 +33,7 @@ bool flip(double p = 0.5)
 template <size_t N>
 int randFrom( const array<int, N> &values, array<double, N> probs)
 {
-    double sum = accumulate(probs.begin(), probs.end(), 0.);
+    const double sum = accumulate(probs.begin(), probs.end(), 0.);
     for (size_t i = 1; i < probs.size(); i++)
     {
         probs[i] += probs[i - 1];
@@ -39,7 +41,7 @@ int randFrom( const array<int, N> &values, array<double, N> probs)
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<> dis(0, sum);
-    double rand = dis(gen);
+    const double rand = dis(gen);
     size_t targetPos = 0;
     for (; targetPos < probs.size(); targetPos++)
     {
@@ -51,7 +53,7 @@ int randFrom( const array<int, N> &values, array<double, N> probs)
     return values[targetPos];
 }
 
-template <class T, size_t N = 40>
+template <class T, size_t N = 80>
 auto& arenaFor()
 {
     static arena<sizeof(T) * N, alignof(T)> a{};
@@ -62,9 +64,9 @@ class Node
 {
 public:
     virtual ~Node() = default;
-    virtual int eval(int n, int xp, int xpp) = 0;
-    virtual int size() = 0;
-    virtual void print() = 0;
+    virtual int eval(int n, int xp, int xpp) const = 0;
+    virtual int size() const = 0;
+    virtual void print() const = 0;
 };
 
 using NodePtr = Node*;
@@ -75,9 +77,9 @@ class Value : public Node
 public:
     Value(int _data) : data(_data) {}
     ~Value() = default;
-    virtual int eval(int n, int xp, int xpp) override { return data; }
-    virtual int size() override { return 1; }
-    virtual void print() override { cout << data << " "; }
+    virtual int eval(int n, int xp, int xpp) const override { return data; }
+    virtual int size() const override { return 1; }
+    virtual void print() const override { cout << data << " "; }
 
     void* Value::operator new (size_t count)
     {
@@ -92,7 +94,7 @@ private:
 };
 
 
-enum class VariableType
+enum class VariableType : size_t
 {
     N,
     XP,
@@ -107,7 +109,7 @@ class Variable : public Node
 public:
     Variable(VariableType _type) : type(_type) {}
     ~Variable() = default;
-    virtual int eval(int n, int xp, int xpp) override { 
+    virtual int eval(int n, int xp, int xpp) const override {
         switch (type)
         {
         case VariableType::N:
@@ -125,8 +127,8 @@ public:
         }
         return 0;
     }
-    virtual int size() override { return 1; }
-    virtual void print() override { cout << VarTypeToStr[type] << " "; }
+    virtual int size() const override { return 1; }
+    virtual void print() const override { cout << VarTypeToStr[type] << " "; }
 
     void* Variable::operator new (size_t count)
     {
@@ -141,7 +143,7 @@ private:
     VariableType type;
 };
 
-enum class OperationType
+enum class OperationType : size_t
 {
     plus,
     minus,
@@ -159,7 +161,7 @@ public:
         delete nodeStg.first;
         delete nodeStg.second;
     }
-    virtual int eval(int n, int xp, int xpp) override {
+    virtual int eval(int n, int xp, int xpp) const override {
         switch (operation)
         {
         case OperationType::plus:
@@ -177,8 +179,8 @@ public:
         }
         return 0;
     }
-    virtual int size() override { return 1 + nodeStg.first->size() + nodeStg.second->size(); }
-    virtual void print() override { 
+    virtual int size() const override { return 1 + nodeStg.first->size() + nodeStg.second->size(); }
+    virtual void print() const override {
         cout << "( " << OpTypeToStr[operation] << " ";
         nodeStg.first->print();
         nodeStg.second->print();
@@ -201,7 +203,7 @@ private:
 
 NodePtr generate_operations()
 {
-    NodePtr root;
+    NodePtr root = nullptr;
     if (flip(0.7))
     {//добавить новое непосредственное значение
         switch (getRand<0, 1>())
@@ -210,22 +212,22 @@ NodePtr generate_operations()
             root = new Value(getRand< 0, 9>());
             break;
         case 1:
-            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 25, 25})));
+            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 1, 1})));
             break;
         }
     }
     else
     {//добавить новый узел вычислений
-        auto pair = make_pair(generate_operations(), generate_operations());
+        const auto pair = make_pair(generate_operations(), generate_operations());
         root = new Operation((OperationType)getRand<0, 2>(), pair);
     }
     return root;
 }
 
 template <size_t N>
-array<int, N> calculate(NodePtr operation_tree, int xpp, int xp)
+array<int, N> calculate(const NodePtr operation_tree, int xpp, int xp)
 {
-    int count = N;
+    constexpr int count = N;
     array<int, N> res_seq;
     res_seq[0] = xpp;
     res_seq[1] = xp;
@@ -236,6 +238,19 @@ array<int, N> calculate(NodePtr operation_tree, int xpp, int xp)
     return res_seq;
 }
 
+template <class T, size_t N>
+double distance(const array<T, N> &lhs, const array<T, N> &rhs)
+{
+    double dist = 0.;
+    for (size_t i = 0; i < N; i++)
+    {
+        dist += pow(lhs[i] - rhs[i], 2);
+    }
+    dist = sqrt(dist);
+    return dist;
+}
+
+
 
 int main()
 {
@@ -245,15 +260,16 @@ int main()
     //    int rn = randFrom({ 1,2,3 }, { 25,50,25 });
     //    fre[rn]++;
     //}
-
-    constexpr array<int, 5> target{ 1, 4, 8, 16, 20};
-    array<int, target.size()> result;
+    
+    constexpr array<int, 6> target{ 1, 4, 12, 16, 20, 24};
+    array<int, target.size()> result {};
     unique_ptr<Node> root;
     while (true)
     {
         root.reset(generate_operations());
         result = calculate<target.size()>(root.get(), target[0], target[1]);
-        if (target == result)
+        //if (target == result)
+        if (distance(target, result) < 2.)
         {
             break;
         }
