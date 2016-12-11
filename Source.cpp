@@ -31,7 +31,7 @@ int getRand(int min, int max)
 {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    static std::uniform_int_distribution<> dis(min, max);
+    std::uniform_int_distribution<> dis(min, max);
     return dis(gen);
 }
 
@@ -103,13 +103,13 @@ public:
 
     virtual NodePtr getByIndex(int &index)
     {
-        index--;
         if (index == 0)
         {
             return this;
         }
         else
         {
+            index--;
             return nullptr;
         }
     }
@@ -174,13 +174,13 @@ public:
 
     virtual NodePtr getByIndex(int &index)
     {
-        index--;
         if (index == 0)
         {
             return this;
         }
         else
         {
+            index--;
             return nullptr;
         }
     }
@@ -259,27 +259,34 @@ public:
             nodeStg.first = gen_fn();
             return;
         }
-        nodeStg.first->mutate(mut_ind, gen_fn);
-        if (mut_ind == 0)
+
+        int sz_left = nodeStg.first->size();
+        if (sz_left > mut_ind)
         {
-            delete nodeStg.second;
-            nodeStg.second = gen_fn();
+            nodeStg.first->mutate(mut_ind, gen_fn);
         }
         else
         {
+            mut_ind -= sz_left;
+            if (mut_ind == 0)
+            {
+                delete nodeStg.second;
+                nodeStg.second = gen_fn();
+                return;
+            }
             nodeStg.second->mutate(mut_ind, gen_fn);
         }
     }
 
     virtual NodePtr getByIndex(int &index)
     {
-        index--;
         if (index == 0)
         {
             return this;
         }
         else
         {
+            index--;
             NodePtr left =  nodeStg.first->getByIndex(index);
             return left != nullptr ? left : nodeStg.second->getByIndex(index);
         }
@@ -369,12 +376,13 @@ void mutate(unique_ptr<Node> &root)
 {
     int sz = root->size();
     int mut_ind = getRand(0, sz-1);
-    if (sz == 1 || mut_ind == 0)
+    if (mut_ind == 0)
     {
         root.reset(generate_operations());
     }
     else
     {
+        //TODO: change to taking NodePtr
         root->mutate(mut_ind, generate_operations);
     }
 }
@@ -390,16 +398,24 @@ NodePtr hybridise(NodePtr p0, NodePtr p1)
     NodePtr node = nullptr;
     if (get_node == 0)
     {
-        node = p0;
+        node = p0->getCopy();
     }
     else
     {
-        node = p0->getByIndex(get_node);
+        node = p0->getByIndex(get_node)->getCopy();
     }
 
-    NodePtr result_node = p1->getCopy();
-    result_node->mutate(set_node, [node] {return node; });
-    return result_node;
+    if (set_node == 0)
+    {
+        return node;
+    }
+    else
+    {
+        NodePtr result_node = p1->getCopy();
+        result_node->mutate(set_node, [node] {return node; });
+        return result_node;
+    }
+
 }
 
 template <size_t N>
@@ -411,10 +427,12 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
     array<unique_ptr<Node>, gens_number> gens_b0, gens_b1, *gens, *new_gens;
     array<pair<double,size_t>, gens_number> distances;
 
-    constexpr size_t elite = gens_number / 2;
-    constexpr size_t parents = gens_number / 2;
-    constexpr size_t children = gens_number / 4;
+    constexpr size_t elite = gens_number / 4; //-V112
+    constexpr size_t parents = gens_number / 8;
+    constexpr size_t children = gens_number / 4; //-V112
     constexpr size_t new_ones = gens_number - elite - children;
+
+    constexpr int max_nodes_number = 30;
 
     gens = &gens_b0;
     new_gens = &gens_b1;
@@ -423,13 +441,20 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
 
     while (true)
     {
+        for_each(begin(*gens), end(*gens), [max_nodes_number](auto &genPtr) {
+            if ( genPtr->size() > max_nodes_number )
+            {
+                genPtr.reset(generate_operations());
+            }
+        });
+
         for (size_t i = 0; i < gens->size(); ++i)
         {
             auto &gen = (*gens)[i];
             result = calculate<N>(gen.get(), target[0], target[1]);
             double m_distance = distance(result, target);
             distances[i] = make_pair(m_distance, i);
-            if (m_distance <= 1.)
+            if (m_distance <= 2.)
             {
                 winner = move(gen);
                 return winner;
@@ -448,9 +473,9 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
             mutate(newGen);
             (*new_gens)[i] = move(newGen);
         }
-        for (; i < elite+children; i++)
+        for (size_t j = 0; i < elite+children; i++, j++)
         {
-            (*new_gens)[i] = move((*gens)[distances[i].second]);
+            (*new_gens)[i] = move((*gens)[distances[j].second]);
         }
         for (; i < new_ones+elite+children; i++)
         {
@@ -484,29 +509,73 @@ void logOperations(ostream &strm, size_t millisecs, const unique_ptr<Node> &root
     }
     strm << endl;
 
-    strm << "Time: " << millisecs << " milliseconds" << endl << endl;
+    strm << "Time: " << millisecs << " milliseconds" << endl << endl; //-V128
+}
+
+void measure(int n = 100)
+{
+    ofstream logfile("measure.txt", ios_base::app);
+
+    logfile << "Count: " << n << endl << endl;
+
+    logfile << "Mutating search" << endl << endl;
+
+    size_t total = 0;
+
+    constexpr array<int, 8> target{ 0, 4, 30, 120, 340, 780, 1554, 2800 };
+
+    for (int i = 0; i < n; i++)
+    {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto root = mutating_search(target);
+        auto t_end = chrono::high_resolution_clock::now();
+        auto millisecs = chrono::duration_cast<chrono::milliseconds>(t_end - t_start);
+        total += millisecs.count();
+        logOperations(cout, (size_t)millisecs.count(), root, target);
+        logOperations(logfile, (size_t)millisecs.count(), root, target);
+    }
+
+    logfile << endl << "Total: " << total << endl; //-V128
+
+
+    total = 0;
+
+    for (int i = 0; i < n; i++)
+    {
+        auto t_start = chrono::high_resolution_clock::now();
+        auto root = dumb_random_search(target);
+        auto t_end = chrono::high_resolution_clock::now();
+        auto millisecs = chrono::duration_cast<chrono::milliseconds>(t_end - t_start);
+        total += millisecs.count();
+        logOperations(cout, (size_t)millisecs.count(), root, target);
+        logOperations(logfile, (size_t)millisecs.count(), root, target);
+    }
+
+    logfile << endl << "Total: " << total << endl; //-V128
 }
 
 int main()
 {
-    ofstream logfile("out.txt", ios_base::app);
+    /*ofstream logfile("out.txt", ios_base::app);
     auto t_start = chrono::high_resolution_clock::now();
 
-    map<int, int> fre;
-    for (int i = 0; i < 1'000'000; i++)
-    {
-        //int rn = randFrom<3>({ 1,2,3 }, { 50,1,1 });
-        int rn = getRand(0, 0);
-        fre[rn]++;
-    }
+    //map<int, int> fre;
+    //for (int i = 0; i < 1'000'000; i++)
+    //{
+    //    //int rn = randFrom<3>({ 1,2,3 }, { 50,1,1 });
+    //    int rn = getRand(0, 0);
+    //    fre[rn]++;
+    //}
 
     //4
-    //constexpr array<int, 6> target{ 0, 4, 30, 120, 340, 780 };
+    constexpr array<int, 8> target{ 0, 4, 30, 120, 340, 780, 1554, 2800 };
 
     //3
-    constexpr array<int, 6> target{ 0, 3, 14, 39, 84, 155 };
+    //constexpr array<int, 6> target{ 0, 3, 14, 39, 84, 155 };
 
     //constexpr array<int, 6> target{ 0, 4, 1, 2, 3, 4 };
+
+    //constexpr array<int, 4> target{ 0, 0, 500, 25 };
 
     //auto root = dumb_random_search(target);
     auto root = mutating_search(target);
@@ -518,6 +587,7 @@ int main()
     logOperations(cout, (size_t)millisecs.count(), root, target);
     logOperations(logfile, (size_t)millisecs.count(), root, target);
 
-
+    */
+    measure();
     return 0;
 }
