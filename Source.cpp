@@ -4,15 +4,17 @@
 #include <vector>
 #include <random>
 #include <iostream>
+#include <fstream>
+#include <chrono>
 #include <map>
 #include <string>
 #include <memory>
 #include <numeric>
 #include <array>
 #include <cmath>
+#include <functional>
 
 #include "short_alloc.h"
-
 
 using namespace std;
 
@@ -25,29 +27,32 @@ int getRand()
     return dis(gen);
 }
 
-bool flip(double p = 0.5)
+int getRand(int min, int max)
 {
     static std::random_device rd;
     static std::mt19937 gen(rd());
-    static std::uniform_real_distribution<> dis;
-    return dis(gen) < p;
+    static std::uniform_int_distribution<> dis(min, max);
+    return dis(gen);
+}
+
+bool flip(double p = 0.5)
+{
+    int pp = int(p * 100);
+    return getRand<0,100-1>() < pp;
 }
 
 template <size_t N>
-int randFrom( const array<int, N> &values, array<double, N> probs)
+int randFrom( const array<int, N> &values, array<int, N> probs)
 {
-    double sum = 0.;
-    for_each(probs.begin(), probs.end(), [&sum](double &val) {
+    int sum = 0;
+    for_each(probs.begin(), probs.end(), [&sum](int &val) {
         val += sum;
         sum = val;
     });
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(0, sum);
-    const double rand = dis(gen);
+    const int rand = getRand(0, sum-1);
     size_t targetPos = distance(probs.begin(), 
         find_if(probs.begin(), probs.end(), 
-            [rand](double element) { return element > rand; }));
+            [rand](int element) { return element > rand; }));
     return values[targetPos];
 }
 
@@ -58,16 +63,23 @@ auto& arenaFor()
     return a;
 }
 
+class Node;
+using NodePtr = Node*;
+NodePtr generate_operations();
+using GeneratorFn = std::function<NodePtr()>;
+
 class Node
 {
 public:
     virtual ~Node() = default;
     virtual int eval(size_t n, int xp, int xpp) const = 0;
     virtual int size() const = 0;
-    virtual void print() const = 0;
+    virtual void print(ostream &strm) const = 0;
+    virtual NodePtr getCopy() const = 0;
+    virtual void mutate(int &mut_ind, GeneratorFn gen_fn) = 0;
+    virtual NodePtr getByIndex(int &index) = 0;
 };
 
-using NodePtr = Node*;
 
 // 0-9
 class Value : public Node
@@ -75,9 +87,32 @@ class Value : public Node
 public:
     Value(int _data) : data(_data) {}
     ~Value() = default;
-    virtual int eval(size_t n, int xp, int xpp) const override { return data; }
-    virtual int size() const override { return 1; }
-    virtual void print() const override { cout << data << " "; }
+    Value(const Value &val) = default;
+    int eval(size_t n, int xp, int xpp) const override { return data; }
+    int size() const override { return 1; }
+    void print(ostream &strm) const override { strm << data << " "; }
+
+    Node* getCopy() const override
+    {
+        return static_cast<Node*>(new Value(*this));
+    }
+
+    virtual void mutate(int &mut_ind, GeneratorFn gen_fn) {
+        mut_ind--;
+    }
+
+    virtual NodePtr getByIndex(int &index)
+    {
+        index--;
+        if (index == 0)
+        {
+            return this;
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
 
     void* Value::operator new (size_t count)
     {
@@ -90,7 +125,6 @@ public:
 private:
     int data;
 };
-
 
 enum class VariableType : size_t
 {
@@ -107,6 +141,7 @@ class Variable : public Node
 public:
     Variable(VariableType _type) : type(_type) {}
     ~Variable() = default;
+    Variable(const Variable &val) = default;
     virtual int eval(size_t n, int xp, int xpp) const override {
         switch (type)
         {
@@ -126,7 +161,29 @@ public:
         return 0;
     }
     virtual int size() const override { return 1; }
-    virtual void print() const override { cout << VarTypeToStr[type] << " "; }
+    virtual void print(ostream &strm) const override { strm << VarTypeToStr[type] << " "; }
+
+    Node* getCopy() const override
+    {
+        return static_cast<Node*>(new Variable(*this));
+    }
+
+    virtual void mutate(int &mut_ind, GeneratorFn gen_fn) {
+        mut_ind--;
+    }
+
+    virtual NodePtr getByIndex(int &index)
+    {
+        index--;
+        if (index == 0)
+        {
+            return this;
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
 
     void* Variable::operator new (size_t count)
     {
@@ -159,6 +216,9 @@ public:
         delete nodeStg.first;
         delete nodeStg.second;
     }
+    Operation(const Operation &val) : operation(val.operation), nodeStg(make_pair(val.nodeStg.first->getCopy(), val.nodeStg.second->getCopy()))
+    {
+    }
     virtual int eval(size_t n, int xp, int xpp) const override {
         switch (operation)
         {
@@ -178,11 +238,51 @@ public:
         return 0;
     }
     virtual int size() const override { return 1 + nodeStg.first->size() + nodeStg.second->size(); }
-    virtual void print() const override {
-        cout << "( " << OpTypeToStr[operation] << " ";
-        nodeStg.first->print();
-        nodeStg.second->print();
-        cout << ") ";
+    virtual void print(ostream &strm) const override {
+        strm << "( " << OpTypeToStr[operation] << " ";
+        nodeStg.first->print(strm);
+        nodeStg.second->print(strm);
+        strm << ") ";
+    }
+
+    Node* getCopy() const override
+    {
+        return static_cast<Operation*>(new Operation(*this));
+    }
+
+    virtual void mutate(int &mut_ind, GeneratorFn gen_fn)
+    {
+        mut_ind--;
+        if (mut_ind == 0)
+        {
+            delete nodeStg.first;
+            nodeStg.first = gen_fn();
+            return;
+        }
+        nodeStg.first->mutate(mut_ind, gen_fn);
+        if (mut_ind == 0)
+        {
+            delete nodeStg.second;
+            nodeStg.second = gen_fn();
+        }
+        else
+        {
+            nodeStg.second->mutate(mut_ind, gen_fn);
+        }
+    }
+
+    virtual NodePtr getByIndex(int &index)
+    {
+        index--;
+        if (index == 0)
+        {
+            return this;
+        }
+        else
+        {
+            NodePtr left =  nodeStg.first->getByIndex(index);
+            return left != nullptr ? left : nodeStg.second->getByIndex(index);
+        }
     }
 
     void* Operation::operator new (size_t count)
@@ -202,7 +302,7 @@ private:
 NodePtr generate_operations()
 {
     NodePtr root = nullptr;
-    if (flip(0.7))
+    if (flip(0.6))
     {//добавить новое непосредственное значение
         switch (getRand<0, 1>())
         {
@@ -210,7 +310,7 @@ NodePtr generate_operations()
             root = new Value(getRand< 0, 9>());
             break;
         case 1:
-            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 25, 25})));
+            root = new Variable((VariableType)(randFrom<3>({ 0,1,2 }, {50, 1, 1})));
             break;
         }
     }
@@ -265,12 +365,41 @@ unique_ptr<Node> dumb_random_search(const array <int, N> &target)
     return root;
 }
 
-NodePtr mutate(NodePtr p0, NodePtr p1)
+void mutate(unique_ptr<Node> &root)
+{
+    int sz = root->size();
+    int mut_ind = getRand(0, sz-1);
+    if (sz == 1 || mut_ind == 0)
+    {
+        root.reset(generate_operations());
+    }
+    else
+    {
+        root->mutate(mut_ind, generate_operations);
+    }
+}
+
+NodePtr hybridise(NodePtr p0, NodePtr p1)
 {
     int sz0 = p0->size();
     int sz1 = p1->size();
-    //TODO: do something
-    return{};
+
+    int get_node = getRand(0, sz0-1);
+    int set_node = getRand(0, sz1-1);
+
+    NodePtr node = nullptr;
+    if (get_node == 0)
+    {
+        node = p0;
+    }
+    else
+    {
+        node = p0->getByIndex(get_node);
+    }
+
+    NodePtr result_node = p1->getCopy();
+    result_node->mutate(set_node, [node] {return node; });
+    return result_node;
 }
 
 template <size_t N>
@@ -278,18 +407,25 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
 {
     unique_ptr<Node> winner = nullptr;
     array<int, N> result {};
-    constexpr size_t gens_number = 4;
-    array<unique_ptr<Node>, gens_number> gens;
-    array<pair<double,size_t>, gens.size()> distances;
-    size_t mutants = 2;
+    constexpr size_t gens_number = 256;
+    array<unique_ptr<Node>, gens_number> gens_b0, gens_b1, *gens, *new_gens;
+    array<pair<double,size_t>, gens_number> distances;
 
-    for_each(begin(gens), end(gens), [](auto &genPtr) { genPtr.reset(generate_operations()); });
+    constexpr size_t elite = gens_number / 2;
+    constexpr size_t parents = gens_number / 2;
+    constexpr size_t children = gens_number / 4;
+    constexpr size_t new_ones = gens_number - elite - children;
+
+    gens = &gens_b0;
+    new_gens = &gens_b1;
+
+    for_each(begin(*gens), end(*gens), [](auto &genPtr) { genPtr.reset(generate_operations()); });
 
     while (true)
     {
-        for (size_t i = 0; i < gens.size(); ++i)
+        for (size_t i = 0; i < gens->size(); ++i)
         {
-            auto &gen = gens[i];
+            auto &gen = (*gens)[i];
             result = calculate<N>(gen.get(), target[0], target[1]);
             double m_distance = distance(result, target);
             distances[i] = make_pair(m_distance, i);
@@ -303,44 +439,85 @@ unique_ptr<Node> mutating_search(const array <int, N> &target)
         std::sort(begin(distances), end(distances), [](const auto &l, const auto &r) {
             return l.first < r.first;
         });
-
-        /*unique_ptr<Node> parent0 = move(gens[distances[0].second]);
-        unique_ptr<Node> parent1 = move(gens[distances[1].second]);
-
-        for_each(begin(gens), begin(gens) + mutants, [&parent0, &parent1](auto &gen) {
-            gen.reset(mutate(parent0.get(), parent1.get()));
-        });*/
-        for_each(begin(gens) + mutants, end(gens), [](auto &gen) {
-            gen.reset(generate_operations());
-        });
-
-
+        size_t i = 0;
+        for (; i < children; i++)
+        {
+            size_t parent0_index = (size_t)getRand<0, parents-1>();
+            size_t parent1_index = (size_t)getRand<0, parents-1>();
+            auto newGen = unique_ptr<Node>(hybridise((*gens)[distances[parent0_index].second].get(), (*gens)[distances[parent1_index].second].get()));
+            mutate(newGen);
+            (*new_gens)[i] = move(newGen);
+        }
+        for (; i < elite+children; i++)
+        {
+            (*new_gens)[i] = move((*gens)[distances[i].second]);
+        }
+        for (; i < new_ones+elite+children; i++)
+        {
+            (*new_gens)[i] = unique_ptr<Node>(generate_operations());
+        }
+        swap(gens, new_gens);
     }
+}
+
+template <size_t N>
+void logOperations(ostream &strm, size_t millisecs, const unique_ptr<Node> &root, const array<int, N> &target)
+{
+    strm << "Function: " << endl;
+    root->print(strm);
+    strm << endl;
+
+    array<int, N> result{};
+    result = calculate<N>(root.get(), target[0], target[1]);
+    
+    strm << "Target: ";
+    for (const auto& elem : target)
+    {
+        strm << elem << " ";
+    }
+    strm << endl;
+
+    strm << "Result: ";
+    for (const auto& elem : result)
+    {
+        strm << elem << " ";
+    }
+    strm << endl;
+
+    strm << "Time: " << millisecs << " milliseconds" << endl << endl;
 }
 
 int main()
 {
-    //map<int, int> fre;
-    //for (int i = 0; i < 1000000; i++)
-    //{
-    //    int rn = randFrom<3>({ 1,2,3 }, { 25,1,1 });
-    //    fre[rn]++;
-    //}
-    
-    constexpr array<int, 5> target{ 1, 1, 2, 3, 5};
+    ofstream logfile("out.txt", ios_base::app);
+    auto t_start = chrono::high_resolution_clock::now();
 
-    auto root = dumb_random_search(target);
-    //auto root = mutating_search(target);
-
-    array<int, target.size()> result{};
-    result = calculate<target.size()>(root.get(), target[0], target[1]);
-
-    root->print();
-    cout << endl;
-
-    for (const auto& elem : result)
+    map<int, int> fre;
+    for (int i = 0; i < 1'000'000; i++)
     {
-    	cout << elem << endl;
+        //int rn = randFrom<3>({ 1,2,3 }, { 50,1,1 });
+        int rn = getRand(0, 0);
+        fre[rn]++;
     }
+
+    //4
+    //constexpr array<int, 6> target{ 0, 4, 30, 120, 340, 780 };
+
+    //3
+    constexpr array<int, 6> target{ 0, 3, 14, 39, 84, 155 };
+
+    //constexpr array<int, 6> target{ 0, 4, 1, 2, 3, 4 };
+
+    //auto root = dumb_random_search(target);
+    auto root = mutating_search(target);
+
+
+    auto t_end = chrono::high_resolution_clock::now();
+
+    auto millisecs = chrono::duration_cast<chrono::milliseconds>(t_end - t_start);
+    logOperations(cout, (size_t)millisecs.count(), root, target);
+    logOperations(logfile, (size_t)millisecs.count(), root, target);
+
+
     return 0;
 }
